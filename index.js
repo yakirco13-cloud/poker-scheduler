@@ -22,6 +22,11 @@ const dayNameToIndex = {
   'thursday': 4, 'friday': 5, 'saturday': 6
 };
 
+// Get Israel time
+function getIsraelTime() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
+}
+
 async function base44Fetch(endpoint, method = 'GET', body = null) {
   const options = {
     method,
@@ -95,60 +100,34 @@ async function getGroupMembersWithPhones(groupId) {
 }
 
 async function checkAutoOpenRegistration() {
+  const now = getIsraelTime();
+  const currentDay = now.getDay();
+  const currentMinutes = now.getHours() * 60 + now.getMinutes();
+  
   console.log(`\n[${new Date().toISOString()}] === AUTO-OPEN CHECK ===`);
+  console.log(`Israel Time: Day=${currentDay} (${Object.keys(dayNameToIndex)[currentDay]}), Time=${now.getHours()}:${now.getMinutes()}`);
+  
   try {
     const allSettings = await listEntities('GroupSettings');
     console.log(`Found ${allSettings.length} GroupSettings`);
-    
-    const now = new Date();
-    const currentDay = now.getDay();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    console.log(`Current: Day=${currentDay} (${Object.keys(dayNameToIndex)[currentDay]}), Minutes=${currentMinutes} (${now.getHours()}:${now.getMinutes()})`);
 
     for (const settings of allSettings) {
-      console.log(`\n--- GroupSettings ${settings.id} ---`);
-      console.log(`autoOpenEnabled: ${settings.autoOpenRegistrationEnabled}`);
-      console.log(`autoOpenDay: ${settings.autoOpenRegistrationDay}`);
-      console.log(`autoOpenTime: ${settings.autoOpenRegistrationTime}`);
-      console.log(`groupId: ${settings.groupId}`);
-      
-      if (!settings.autoOpenRegistrationEnabled) {
-        console.log('SKIP: Auto-open not enabled');
-        continue;
-      }
+      if (!settings.autoOpenRegistrationEnabled) continue;
       
       const targetDayIndex = dayNameToIndex[settings.autoOpenRegistrationDay];
-      console.log(`Target day index: ${targetDayIndex}, Current day: ${currentDay}`);
-      
-      if (targetDayIndex === undefined) {
-        console.log('SKIP: Invalid day name');
-        continue;
-      }
-      
-      if (currentDay !== targetDayIndex) {
-        console.log('SKIP: Not the right day');
-        continue;
-      }
+      if (targetDayIndex === undefined || currentDay !== targetDayIndex) continue;
       
       const [targetHour, targetMinute] = (settings.autoOpenRegistrationTime || '12:00').split(':').map(Number);
       const targetMinutes = targetHour * 60 + targetMinute;
-      console.log(`Target minutes: ${targetMinutes}, Current minutes: ${currentMinutes}, Diff: ${Math.abs(currentMinutes - targetMinutes)}`);
       
-      if (Math.abs(currentMinutes - targetMinutes) > 2) {
-        console.log('SKIP: Not within 2-minute window');
-        continue;
-      }
+      console.log(`Group ${settings.groupId}: target=${targetHour}:${targetMinute}, current=${now.getHours()}:${now.getMinutes()}, diff=${Math.abs(currentMinutes - targetMinutes)}min`);
+      
+      if (Math.abs(currentMinutes - targetMinutes) > 2) continue;
 
       console.log('TIME MATCH! Looking for games...');
       const games = await filterEntities('Game', { groupId: settings.groupId });
-      console.log(`Found ${games.length} games for this group`);
-      
-      for (const game of games) {
-        console.log(`Game ${game.id}: status=${game.status}, registrationOpen=${game.registrationOpen}, startAt=${game.startAt}`);
-      }
-      
-      const scheduledGames = games.filter(g => g.status === 'scheduled' && !g.registrationOpen && new Date(g.startAt) > now);
-      console.log(`Eligible games: ${scheduledGames.length}`);
+      const scheduledGames = games.filter(g => g.status === 'scheduled' && !g.registrationOpen && new Date(g.startAt) > new Date());
+      console.log(`Found ${scheduledGames.length} eligible games`);
 
       for (const game of scheduledGames) {
         console.log(`>>> OPENING registration for game ${game.id}`);
@@ -173,10 +152,11 @@ async function checkAutoOpenRegistration() {
 }
 
 async function checkGameDayReminders() {
+  const now = getIsraelTime();
   console.log(`[${new Date().toISOString()}] Checking game day reminders...`);
+  
   try {
     const allSettings = await listEntities('GroupSettings');
-    const now = new Date();
 
     for (const settings of allSettings) {
       if (!settings.dayOfGamePushEnabled) continue;
@@ -188,7 +168,7 @@ async function checkGameDayReminders() {
         if (game.reminderSent) continue;
         const gameTime = new Date(game.startAt);
         const reminderTime = new Date(gameTime.getTime() - offsetMinutes * 60 * 1000);
-        const diffMs = now.getTime() - reminderTime.getTime();
+        const diffMs = new Date().getTime() - reminderTime.getTime();
         if (diffMs < 0 || diffMs > 2 * 60 * 1000) continue;
 
         console.log(`Sending reminder for game ${game.id}`);
