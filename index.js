@@ -1,12 +1,24 @@
+<<<<<<< HEAD
+=======
+import { createClient } from '@base44/sdk';
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
 import cron from 'node-cron';
 import twilio from 'twilio';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+<<<<<<< HEAD
 const BASE44_APP_ID = process.env.BASE44_APP_ID;
 const BASE44_API_KEY = process.env.BASE44_API_KEY;
 const BASE_URL = `https://app.base44.com/api/apps/${BASE44_APP_ID}`;
+=======
+// Base44 client
+const base44 = createClient({
+  appId: process.env.BASE44_APP_ID,
+  apiKey: process.env.BASE44_API_KEY,
+});
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
 
 // Twilio client
 const twilioClient = twilio(
@@ -30,6 +42,7 @@ const dayNameToIndex = {
   'saturday': 6
 };
 
+<<<<<<< HEAD
 // Base44 API helper
 async function base44Fetch(endpoint, method = 'GET', body = null) {
   const options = {
@@ -80,6 +93,20 @@ function formatPhone(phone) {
   return cleaned;
 }
 
+=======
+// Format phone number for WhatsApp
+function formatPhone(phone) {
+  let cleaned = phone.replace(/\D/g, '');
+  if (cleaned.startsWith('0')) {
+    cleaned = '972' + cleaned.slice(1);
+  }
+  if (!cleaned.startsWith('+')) {
+    cleaned = '+' + cleaned;
+  }
+  return cleaned;
+}
+
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
 // Send WhatsApp template message
 async function sendWhatsAppTemplate(to, contentSid, variables) {
   try {
@@ -102,8 +129,13 @@ async function sendWhatsAppTemplate(to, contentSid, variables) {
 // Get group members with phone numbers and names
 async function getGroupMembersWithPhones(groupId) {
   try {
+<<<<<<< HEAD
     const members = await filterEntities('GroupMember', { groupId, isActive: true });
     const users = await listEntities('User');
+=======
+    const members = await base44.entities.GroupMember.filter({ groupId, isActive: true });
+    const users = await base44.entities.User.list();
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
     
     return members
       .map(member => {
@@ -126,7 +158,11 @@ async function checkAutoOpenRegistration() {
   console.log(`[${new Date().toISOString()}] Checking auto-open registration...`);
   
   try {
+<<<<<<< HEAD
     const allSettings = await listEntities('GroupSettings');
+=======
+    const allSettings = await base44.entities.GroupSettings.list();
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
     const now = new Date();
     const currentDay = now.getDay();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
@@ -144,7 +180,11 @@ async function checkAutoOpenRegistration() {
       if (Math.abs(currentMinutes - targetMinutes) > 2) continue;
       
       // Find scheduled games for this group
+<<<<<<< HEAD
       const games = await filterEntities('Game', { groupId: settings.groupId });
+=======
+      const games = await base44.entities.Game.filter({ groupId: settings.groupId });
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
       const scheduledGames = games.filter(g => 
         g.status === 'scheduled' && 
         !g.registrationOpen &&
@@ -154,15 +194,28 @@ async function checkAutoOpenRegistration() {
       for (const game of scheduledGames) {
         console.log(`Opening registration for game ${game.id} in group ${settings.groupId}`);
         
+<<<<<<< HEAD
         await updateEntity('Game', game.id, { registrationOpen: true });
+=======
+        await base44.entities.Game.update(game.id, { registrationOpen: true });
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
         
         // Send WhatsApp notifications if enabled
         if (settings.sendReminderOnRegistrationOpen) {
           const members = await getGroupMembersWithPhones(settings.groupId);
+<<<<<<< HEAD
           const group = await getEntity('Group', settings.groupId);
           const link = `https://techholdem.me/NextGame?groupId=${settings.groupId}`;
           
           for (const member of members) {
+=======
+          const group = await base44.entities.Group.get(settings.groupId);
+          const link = `https://techholdem.me/NextGame?groupId=${settings.groupId}`;
+          
+          for (const member of members) {
+            // Template: poker_reminder
+            // {{1}} = User name, {{2}} = Group name, {{3}} = Link
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
             await sendWhatsAppTemplate(member.phone, TEMPLATE_REGISTRATION_OPEN, {
               "1": member.displayName,
               "2": group?.name || 'פוקר',
@@ -182,7 +235,11 @@ async function checkGameDayReminders() {
   console.log(`[${new Date().toISOString()}] Checking game day reminders...`);
   
   try {
+<<<<<<< HEAD
     const allSettings = await listEntities('GroupSettings');
+=======
+    const allSettings = await base44.entities.GroupSettings.list();
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
     const now = new Date();
     
     for (const settings of allSettings) {
@@ -190,7 +247,12 @@ async function checkGameDayReminders() {
       
       const offsetMinutes = settings.dayOfGamePushOffsetMinutes || 60;
       
+<<<<<<< HEAD
       const games = await filterEntities('Game', { groupId: settings.groupId });
+=======
+      // Find active/scheduled games for this group
+      const games = await base44.entities.Game.filter({ groupId: settings.groupId });
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
       
       for (const game of games) {
         if (game.status !== 'scheduled' && game.status !== 'active') continue;
@@ -199,20 +261,39 @@ async function checkGameDayReminders() {
         const gameTime = new Date(game.startAt);
         const reminderTime = new Date(gameTime.getTime() - offsetMinutes * 60 * 1000);
         
+<<<<<<< HEAD
+=======
+        // Check if we're within 2 minutes of reminder time
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
         const diffMs = now.getTime() - reminderTime.getTime();
         if (diffMs < 0 || diffMs > 2 * 60 * 1000) continue;
         
         console.log(`Sending reminder for game ${game.id}`);
         
+<<<<<<< HEAD
         await updateEntity('Game', game.id, { reminderSent: true });
         
+=======
+        // Mark reminder as sent
+        await base44.entities.Game.update(game.id, { reminderSent: true });
+        
+        // Get members who are seated
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
         const seatedUserIds = (game.seats || []).map(s => s.userId);
         const members = await getGroupMembersWithPhones(settings.groupId);
         const seatedMembers = members.filter(m => seatedUserIds.includes(m.userId));
         
+<<<<<<< HEAD
         const group = await getEntity('Group', settings.groupId);
         
         for (const member of seatedMembers) {
+=======
+        const group = await base44.entities.Group.get(settings.groupId);
+        
+        for (const member of seatedMembers) {
+          // Template: game_reminder
+          // {{1}} = Group name
+>>>>>>> 8bcf30e43deeb8e66b46d492aa4fb3ccb8f4c049
           await sendWhatsAppTemplate(member.phone, TEMPLATE_GAME_REMINDER, {
             "1": group?.name || 'פוקר'
           });
