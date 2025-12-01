@@ -1,0 +1,14 @@
+{
+  "name": "poker-scheduler",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@base44/sdk": "^1.0.54",
+    "node-cron": "^3.0.3",
+    "twilio": "^5.0.0",
+    "dotenv": "^16.3.1"
+  }
+}
