@@ -29,7 +29,11 @@ async function base44Fetch(endpoint, method = 'GET', body = null) {
   };
   if (body) options.body = JSON.stringify(body);
   const response = await fetch(`${BASE_URL}${endpoint}`, options);
-  if (!response.ok) throw new Error(`Base44 API error: ${response.status}`);
+  if (!response.ok) {
+    const text = await response.text();
+    console.error(`API Error: ${response.status} - ${text}`);
+    throw new Error(`Base44 API error: ${response.status}`);
+  }
   return response.json();
 }
 
@@ -91,30 +95,68 @@ async function getGroupMembersWithPhones(groupId) {
 }
 
 async function checkAutoOpenRegistration() {
-  console.log(`[${new Date().toISOString()}] Checking auto-open registration...`);
+  console.log(`\n[${new Date().toISOString()}] === AUTO-OPEN CHECK ===`);
   try {
     const allSettings = await listEntities('GroupSettings');
+    console.log(`Found ${allSettings.length} GroupSettings`);
+    
     const now = new Date();
     const currentDay = now.getDay();
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    console.log(`Current: Day=${currentDay} (${Object.keys(dayNameToIndex)[currentDay]}), Minutes=${currentMinutes} (${now.getHours()}:${now.getMinutes()})`);
 
     for (const settings of allSettings) {
-      if (!settings.autoOpenRegistrationEnabled) continue;
+      console.log(`\n--- GroupSettings ${settings.id} ---`);
+      console.log(`autoOpenEnabled: ${settings.autoOpenRegistrationEnabled}`);
+      console.log(`autoOpenDay: ${settings.autoOpenRegistrationDay}`);
+      console.log(`autoOpenTime: ${settings.autoOpenRegistrationTime}`);
+      console.log(`groupId: ${settings.groupId}`);
+      
+      if (!settings.autoOpenRegistrationEnabled) {
+        console.log('SKIP: Auto-open not enabled');
+        continue;
+      }
+      
       const targetDayIndex = dayNameToIndex[settings.autoOpenRegistrationDay];
-      if (targetDayIndex === undefined || currentDay !== targetDayIndex) continue;
+      console.log(`Target day index: ${targetDayIndex}, Current day: ${currentDay}`);
+      
+      if (targetDayIndex === undefined) {
+        console.log('SKIP: Invalid day name');
+        continue;
+      }
+      
+      if (currentDay !== targetDayIndex) {
+        console.log('SKIP: Not the right day');
+        continue;
+      }
+      
       const [targetHour, targetMinute] = (settings.autoOpenRegistrationTime || '12:00').split(':').map(Number);
       const targetMinutes = targetHour * 60 + targetMinute;
-      if (Math.abs(currentMinutes - targetMinutes) > 2) continue;
+      console.log(`Target minutes: ${targetMinutes}, Current minutes: ${currentMinutes}, Diff: ${Math.abs(currentMinutes - targetMinutes)}`);
+      
+      if (Math.abs(currentMinutes - targetMinutes) > 2) {
+        console.log('SKIP: Not within 2-minute window');
+        continue;
+      }
 
+      console.log('TIME MATCH! Looking for games...');
       const games = await filterEntities('Game', { groupId: settings.groupId });
+      console.log(`Found ${games.length} games for this group`);
+      
+      for (const game of games) {
+        console.log(`Game ${game.id}: status=${game.status}, registrationOpen=${game.registrationOpen}, startAt=${game.startAt}`);
+      }
+      
       const scheduledGames = games.filter(g => g.status === 'scheduled' && !g.registrationOpen && new Date(g.startAt) > now);
+      console.log(`Eligible games: ${scheduledGames.length}`);
 
       for (const game of scheduledGames) {
-        console.log(`Opening registration for game ${game.id}`);
+        console.log(`>>> OPENING registration for game ${game.id}`);
         await updateEntity('Game', game.id, { registrationOpen: true });
 
         if (settings.sendReminderOnRegistrationOpen) {
           const members = await getGroupMembersWithPhones(settings.groupId);
+          console.log(`Sending WhatsApp to ${members.length} members`);
           const group = await getEntity('Group', settings.groupId);
           const link = `https://techholdem.me/NextGame?groupId=${settings.groupId}`;
           for (const member of members) {
