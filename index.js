@@ -26,6 +26,23 @@ function getIsraelTime() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
 }
 
+// Sanitize variables for Twilio - remove special chars that cause error 21656
+function sanitizeVariable(value) {
+  if (value === null || value === undefined || value === '') {
+    return 'N/A';
+  }
+  return String(value)
+    .replace(/\n/g, ' ')
+    .replace(/\r/g, ' ')
+    .replace(/\t/g, ' ')
+    .replace(/\s{4,}/g, '   ')
+    .replace(/'/g, "'")
+    .replace(/'/g, "'")
+    .replace(/"/g, '"')
+    .replace(/"/g, '"')
+    .trim() || 'N/A';
+}
+
 async function base44Fetch(endpoint, method = 'GET', body = null) {
   const options = {
     method,
@@ -69,21 +86,27 @@ async function sendWhatsAppTemplate(to, contentSid, variables) {
   try {
     const phone = formatPhone(to);
     
+    const sanitizedVars = {};
+    for (const [key, value] of Object.entries(variables)) {
+      sanitizedVars[key] = sanitizeVariable(value);
+    }
+    
     console.log(`Sending WhatsApp to ${phone} with template ${contentSid}`);
-    console.log(`Variables:`, variables);
+    console.log(`Variables:`, JSON.stringify(sanitizedVars));
     
     const message = await twilioClient.messages.create({
       from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`,
       to: `whatsapp:${phone}`,
       contentSid: contentSid,
-      contentVariables: JSON.stringify(variables)
+      contentVariables: JSON.stringify(sanitizedVars)
     });
     
-    console.log(`WhatsApp sent to ${phone}, SID: ${message.sid}`);
+    console.log(`✅ WhatsApp sent to ${phone}, SID: ${message.sid}`);
     return true;
   } catch (error) {
-    console.error(`Failed to send WhatsApp to ${to}:`, error.message);
-    console.error(`Full error:`, JSON.stringify(error, null, 2));
+    console.error(`❌ Failed to send WhatsApp to ${to}:`, error.message);
+    if (error.code) console.error(`Error code: ${error.code}`);
+    if (error.moreInfo) console.error(`More info: ${error.moreInfo}`);
     return false;
   }
 }
@@ -98,13 +121,82 @@ async function getGroupMembersWithPhones(groupId) {
         return { 
           ...member, 
           phone: user?.phone || member.phone, 
-          displayName: user?.displayName || member.displayName || 'שחקן' 
+          displayName: user?.displayName || member.displayName || 'חבר' 
         };
       })
       .filter(m => m.phone);
   } catch (error) {
     console.error('Error getting members:', error);
     return [];
+  }
+}
+
+async function checkRegistrationNotifications() {
+  console.log(`\n[${new Date().toISOString()}] === CHECKING REGISTRATION NOTIFICATIONS ===`);
+  
+  try {
+    const allSettings = await listEntities('GroupSettings');
+    const allGames = await listEntities('Game');
+    
+    const gamesNeedingNotification = allGames.filter(g => 
+      g.registrationOpen === true && 
+      g.registrationNotificationSent !== true &&
+      g.status === 'scheduled' &&
+      new Date(g.startAt) > new Date()
+    );
+    
+    console.log(`Found ${gamesNeedingNotification.length} games needing notification`);
+    
+    for (const game of gamesNeedingNotification) {
+      const settings = allSettings.find(s => s.groupId === game.groupId);
+      
+      if (!settings?.sendReminderOnRegistrationOpen) {
+        console.log(`⏭️ Skipping game ${game.id} - notifications disabled for group`);
+        await updateEntity('Game', game.id, { registrationNotificationSent: true });
+        continue;
+      }
+      
+      console.log(`>>> 📨 Sending registration notification for game ${game.id}`);
+      
+      const members = await getGroupMembersWithPhones(game.groupId);
+      console.log(`Found ${members.length} members with phones`);
+      
+      let group;
+      try {
+        group = await getEntity('Group', game.groupId);
+      } catch (e) {
+        console.error('Could not fetch group:', e.message);
+        group = { name: 'פוקר' };
+      }
+      
+      const link = `https://techholdem.me/NextGame?groupId=${game.groupId}`;
+      
+      let successCount = 0;
+      let failCount = 0;
+      
+      for (const member of members) {
+        const vars = {
+          "1": member.displayName || 'חבר',
+          "2": group?.name || 'פוקר',
+          "3": link
+        };
+        
+        const success = await sendWhatsAppTemplate(member.phone, TEMPLATE_REGISTRATION_OPEN, vars);
+        if (success) {
+          successCount++;
+        } else {
+          failCount++;
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
+      console.log(`📊 Notification results: ${successCount} sent, ${failCount} failed`);
+      
+      await updateEntity('Game', game.id, { registrationNotificationSent: true });
+    }
+  } catch (error) {
+    console.error('Error checking registration notifications:', error);
   }
 }
 
@@ -128,32 +220,19 @@ async function checkAutoOpenRegistration() {
       const [targetHour, targetMinute] = (settings.autoOpenRegistrationTime || '12:00').split(':').map(Number);
       const targetMinutes = targetHour * 60 + targetMinute;
       
-      if (Math.abs(currentMinutes - targetMinutes) > 2) continue;
+      if (Math.abs(currentMinutes - targetMinutes) > 5) continue;
 
-      console.log('TIME MATCH! Looking for games...');
+      console.log('⏰ TIME MATCH! Looking for games...');
       const games = await filterEntities('Game', { groupId: settings.groupId });
-      const scheduledGames = games.filter(g => g.status === 'scheduled' && !g.registrationOpen && new Date(g.startAt) > new Date());
+      const scheduledGames = games.filter(g => 
+        g.status === 'scheduled' && 
+        !g.registrationOpen && 
+        new Date(g.startAt) > new Date()
+      );
 
       for (const game of scheduledGames) {
-        console.log(`>>> OPENING registration for game ${game.id}`);
+        console.log(`>>> 🔓 OPENING registration for game ${game.id}`);
         await updateEntity('Game', game.id, { registrationOpen: true });
-
-        if (settings.sendReminderOnRegistrationOpen) {
-          const members = await getGroupMembersWithPhones(settings.groupId);
-          console.log(`Found ${members.length} members with phones`);
-          
-          const group = await getEntity('Group', settings.groupId);
-          const link = `https://techholdem.me/NextGame?groupId=${settings.groupId}`;
-          
-          for (const member of members) {
-            const vars = {
-              "1": String(member.displayName || 'שחקן'),
-              "2": String(group?.name || 'פוקר'),
-              "3": String(link)
-            };
-            await sendWhatsAppTemplate(member.phone, TEMPLATE_REGISTRATION_OPEN, vars);
-          }
-        }
       }
     }
   } catch (error) {
@@ -162,8 +241,7 @@ async function checkAutoOpenRegistration() {
 }
 
 async function checkGameDayReminders() {
-  const now = getIsraelTime();
-  console.log(`[${new Date().toISOString()}] Checking game day reminders...`);
+  console.log(`\n[${new Date().toISOString()}] === CHECKING GAME DAY REMINDERS ===`);
   
   try {
     const allSettings = await listEntities('GroupSettings');
@@ -179,21 +257,40 @@ async function checkGameDayReminders() {
         const gameTime = new Date(game.startAt);
         const reminderTime = new Date(gameTime.getTime() - offsetMinutes * 60 * 1000);
         const diffMs = new Date().getTime() - reminderTime.getTime();
-        if (diffMs < 0 || diffMs > 2 * 60 * 1000) continue;
+        if (diffMs < 0 || diffMs > 5 * 60 * 1000) continue;
 
-        console.log(`Sending reminder for game ${game.id}`);
+        console.log(`>>> 🔔 Sending reminder for game ${game.id}`);
         await updateEntity('Game', game.id, { reminderSent: true });
         const seatedUserIds = (game.seats || []).map(s => s.userId);
         const members = await getGroupMembersWithPhones(settings.groupId);
         const seatedMembers = members.filter(m => seatedUserIds.includes(m.userId));
-        const group = await getEntity('Group', settings.groupId);
+        
+        let group;
+        try {
+          group = await getEntity('Group', settings.groupId);
+        } catch (e) {
+          console.error('Could not fetch group:', e.message);
+          group = { name: 'פוקר' };
+        }
+
+        let successCount = 0;
+        let failCount = 0;
 
         for (const member of seatedMembers) {
           const vars = {
-            "1": String(group?.name || 'פוקר')
+            "1": group?.name || 'פוקר'
           };
-          await sendWhatsAppTemplate(member.phone, TEMPLATE_GAME_REMINDER, vars);
+          const success = await sendWhatsAppTemplate(member.phone, TEMPLATE_GAME_REMINDER, vars);
+          if (success) {
+            successCount++;
+          } else {
+            failCount++;
+          }
+          
+          await new Promise(resolve => setTimeout(resolve, 500));
         }
+        
+        console.log(`📊 Reminder results: ${successCount} sent, ${failCount} failed`);
       }
     }
   } catch (error) {
@@ -201,11 +298,20 @@ async function checkGameDayReminders() {
   }
 }
 
-cron.schedule('* * * * *', async () => {
+async function runAllChecks() {
+  console.log('\n' + '='.repeat(60));
+  console.log(`🎰 Poker Scheduler Check - ${new Date().toISOString()}`);
+  console.log('='.repeat(60));
+  
   await checkAutoOpenRegistration();
+  await checkRegistrationNotifications();
   await checkGameDayReminders();
-});
+  
+  console.log('\n✅ All checks completed\n');
+}
 
-console.log('Poker Scheduler started!');
-checkAutoOpenRegistration();
-checkGameDayReminders();
+cron.schedule('*/5 * * * *', runAllChecks);
+
+console.log('🎰 Poker Scheduler started! Running every 5 minutes.');
+console.log('Running initial check...');
+runAllChecks();
