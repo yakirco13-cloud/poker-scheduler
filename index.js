@@ -22,7 +22,6 @@ const dayNameToIndex = {
   'thursday': 4, 'friday': 5, 'saturday': 6
 };
 
-// Get Israel time
 function getIsraelTime() {
   return new Date(new Date().toLocaleString("en-US", { timeZone: "Asia/Jerusalem" }));
 }
@@ -60,7 +59,7 @@ async function updateEntity(entityName, id, data) {
 }
 
 function formatPhone(phone) {
-  let cleaned = phone.replace(/\D/g, '');
+  let cleaned = String(phone).replace(/\D/g, '');
   if (cleaned.startsWith('0')) cleaned = '972' + cleaned.slice(1);
   if (!cleaned.startsWith('+')) cleaned = '+' + cleaned;
   return cleaned;
@@ -69,16 +68,22 @@ function formatPhone(phone) {
 async function sendWhatsAppTemplate(to, contentSid, variables) {
   try {
     const phone = formatPhone(to);
-    await twilioClient.messages.create({
+    
+    console.log(`Sending WhatsApp to ${phone} with template ${contentSid}`);
+    console.log(`Variables:`, variables);
+    
+    const message = await twilioClient.messages.create({
       from: `whatsapp:${TWILIO_WHATSAPP_NUMBER}`,
       to: `whatsapp:${phone}`,
       contentSid: contentSid,
       contentVariables: JSON.stringify(variables)
     });
-    console.log(`WhatsApp sent to ${phone}`);
+    
+    console.log(`WhatsApp sent to ${phone}, SID: ${message.sid}`);
     return true;
   } catch (error) {
     console.error(`Failed to send WhatsApp to ${to}:`, error.message);
+    console.error(`Full error:`, JSON.stringify(error, null, 2));
     return false;
   }
 }
@@ -90,7 +95,11 @@ async function getGroupMembersWithPhones(groupId) {
     return members
       .map(member => {
         const user = users.find(u => u.id === member.userId);
-        return { ...member, phone: user?.phone || member.phone, displayName: user?.displayName || member.displayName || 'שחקן' };
+        return { 
+          ...member, 
+          phone: user?.phone || member.phone, 
+          displayName: user?.displayName || member.displayName || 'שחקן' 
+        };
       })
       .filter(m => m.phone);
   } catch (error) {
@@ -105,11 +114,10 @@ async function checkAutoOpenRegistration() {
   const currentMinutes = now.getHours() * 60 + now.getMinutes();
   
   console.log(`\n[${new Date().toISOString()}] === AUTO-OPEN CHECK ===`);
-  console.log(`Israel Time: Day=${currentDay} (${Object.keys(dayNameToIndex)[currentDay]}), Time=${now.getHours()}:${now.getMinutes()}`);
+  console.log(`Israel Time: Day=${currentDay}, Time=${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`);
   
   try {
     const allSettings = await listEntities('GroupSettings');
-    console.log(`Found ${allSettings.length} GroupSettings`);
 
     for (const settings of allSettings) {
       if (!settings.autoOpenRegistrationEnabled) continue;
@@ -120,14 +128,11 @@ async function checkAutoOpenRegistration() {
       const [targetHour, targetMinute] = (settings.autoOpenRegistrationTime || '12:00').split(':').map(Number);
       const targetMinutes = targetHour * 60 + targetMinute;
       
-      console.log(`Group ${settings.groupId}: target=${targetHour}:${targetMinute}, current=${now.getHours()}:${now.getMinutes()}, diff=${Math.abs(currentMinutes - targetMinutes)}min`);
-      
       if (Math.abs(currentMinutes - targetMinutes) > 2) continue;
 
       console.log('TIME MATCH! Looking for games...');
       const games = await filterEntities('Game', { groupId: settings.groupId });
       const scheduledGames = games.filter(g => g.status === 'scheduled' && !g.registrationOpen && new Date(g.startAt) > new Date());
-      console.log(`Found ${scheduledGames.length} eligible games`);
 
       for (const game of scheduledGames) {
         console.log(`>>> OPENING registration for game ${game.id}`);
@@ -135,13 +140,18 @@ async function checkAutoOpenRegistration() {
 
         if (settings.sendReminderOnRegistrationOpen) {
           const members = await getGroupMembersWithPhones(settings.groupId);
-          console.log(`Sending WhatsApp to ${members.length} members`);
+          console.log(`Found ${members.length} members with phones`);
+          
           const group = await getEntity('Group', settings.groupId);
           const link = `https://techholdem.me/NextGame?groupId=${settings.groupId}`;
+          
           for (const member of members) {
-            await sendWhatsAppTemplate(member.phone, TEMPLATE_REGISTRATION_OPEN, {
-              "1": member.displayName, "2": group?.name || 'פוקר', "3": link
-            });
+            const vars = {
+              "1": String(member.displayName || 'שחקן'),
+              "2": String(group?.name || 'פוקר'),
+              "3": String(link)
+            };
+            await sendWhatsAppTemplate(member.phone, TEMPLATE_REGISTRATION_OPEN, vars);
           }
         }
       }
@@ -179,7 +189,10 @@ async function checkGameDayReminders() {
         const group = await getEntity('Group', settings.groupId);
 
         for (const member of seatedMembers) {
-          await sendWhatsAppTemplate(member.phone, TEMPLATE_GAME_REMINDER, { "1": group?.name || 'פוקר' });
+          const vars = {
+            "1": String(group?.name || 'פוקר')
+          };
+          await sendWhatsAppTemplate(member.phone, TEMPLATE_GAME_REMINDER, vars);
         }
       }
     }
